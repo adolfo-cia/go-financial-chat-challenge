@@ -1,0 +1,94 @@
+name: financial-chat
+
+services:
+
+  rabbit:
+    container_name: financial-bot-queue
+    image: rabbitmq:3.13.3-alpine
+    restart: always
+    healthcheck:
+      test: "rabbitmq-diagnostics -q ping"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "5672:5672"
+    networks:
+      - financial-chat-network
+  
+  bot:
+    container_name: financial-bot
+    image: financial-bot:latest
+    build:
+      context: .
+      dockerfile: bot.Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      - RABBIT_URL=amqp://guest:guest@financial-bot-queue:5672/
+    depends_on:
+      rabbit:
+        condition: service_healthy
+    networks:
+      - financial-chat-network
+
+  db:
+    container_name: financial-chat-db
+    image: postgres:14.11-alpine3.19
+    restart: always
+    environment:
+      - POSTGRES_USER=root
+      - POSTGRES_PASSWORD=root
+      - POSTGRES_DB=financial-chat
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $$POSTGRES_DB -U $$POSTGRES_USER"]
+      interval: 1s
+      timeout: 1s
+      retries: 5
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    networks:
+      - financial-chat-network
+  
+  migrate:
+    container_name: financial-chat-migrate
+    image: migrate/migrate
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./db/migration:/migration:ro
+    command:
+      [ "-path", "/migration", "-database", "postgresql://root:root@financial-chat-db:5432/financial-chat?sslmode=disable", "-verbose", "up" ]
+    networks:
+      - financial-chat-network
+
+  api:
+    container_name: financial-chat-api
+    image: financial-chat-api:latest
+    build:
+      context: .
+      dockerfile: chat.Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - DB_SOURCE=postgresql://root:root@financial-chat-db:5432/financial-chat?sslmode=disable
+      - RABBIT_URL=amqp://guest:guest@financial-bot-queue:5672/
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbit:
+        condition: service_healthy
+    networks:
+      - financial-chat-network
+
+volumes:
+  db-data:
+    name: financial-chat-db-data
+
+networks:
+  financial-chat-network:
+    name: financial-chat-network
+    external: true
