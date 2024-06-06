@@ -91,4 +91,4 @@ volumes:
 networks:
   financial-chat-network:
     name: financial-chat-network
-    external: true
+    external: false
